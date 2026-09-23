@@ -28,6 +28,29 @@ export const completeRegistration = mutation({
       );
     }
 
+    // Admin eligibility must be validated BEFORE mutating the caller's role,
+    // otherwise the caller would count themselves as the existing admin. Only
+    // admins with a real signable auth account block registration — the demo
+    // seed's synthetic admin user row (no credentials) must not.
+    if (args.role === ROLES.ADMIN) {
+      const adminUsers = (await ctx.db.query("users").collect()).filter(
+        (u) => u.role === ROLES.ADMIN && u._id !== userId,
+      );
+      let realAdmins = 0;
+      for (const admin of adminUsers) {
+        const account = await ctx.db
+          .query("authAccounts")
+          .withIndex("userIdAndProvider", (q) => q.eq("userId", admin._id))
+          .first();
+        if (account) realAdmins++;
+      }
+      if (realAdmins > 0) {
+        throw new Error(
+          "An admin account already exists. Ask the existing admin for access.",
+        );
+      }
+    }
+
     await ctx.db.patch(userId, { role: args.role });
 
     if (args.role === ROLES.RESTAURANT) {
@@ -46,16 +69,8 @@ export const completeRegistration = mutation({
       return { orgId, role: args.role };
     }
 
-    // Admin: only grantable while the platform has no admin yet (demo guard).
     if (args.role === ROLES.ADMIN) {
-      const admins = (await ctx.db.query("users").collect()).filter(
-        (u: any) => u.role === ROLES.ADMIN,
-      );
-      if (admins.length > 0) {
-        throw new Error(
-          "An admin account already exists. Ask the existing admin for access.",
-        );
-      }
+      // Admin needs no org row.
       return { orgId: null, role: args.role };
     }
 
